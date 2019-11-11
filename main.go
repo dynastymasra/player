@@ -119,7 +119,7 @@ func players(id int) error {
 	Flag++
 	fmt.Printf("%s found on id %d\n", responseData.Data.Team.Name, id)
 
-	// sequential map player to PlayerData
+	// map player to PlayerData
 	for _, player := range responseData.Data.Team.Players {
 		playerData := PlayerData[player.Name]
 		player.Teams = append(playerData.Teams, responseData.Data.Team.Name)
