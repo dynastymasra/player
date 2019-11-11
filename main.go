@@ -130,7 +130,6 @@ func players(id int) error {
 }
 
 func show(players map[string]Player) {
-	fmt.Println(len(players))
 	keys := make([]string, 0, len(players))
 	for key := range players {
 		keys = append(keys, key)
