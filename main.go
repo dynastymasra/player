@@ -2,20 +2,23 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 
 	"golang.org/x/text/collate"
 	"golang.org/x/text/language"
 )
 
+const FootballTeam = "https://api.onefootball.com/score-one/api/teams/en/%d.json"
+
 var (
 	PlayerData map[string]Player
 	TeamData   map[string]*Team
-	Flag       int
+	//Flag       int
 )
 
 type ResponseData struct {
@@ -62,6 +65,9 @@ func main() {
 		"Bayern Munich",
 	}
 
+	job := make(chan int)
+	result := make(chan string, len(teamNames))
+
 	TeamData = map[string]*Team{}
 	PlayerData = map[string]Player{}
 
@@ -69,64 +75,78 @@ func main() {
 		TeamData[name] = &Team{Name: name}
 	}
 
-	Flag = 0
-	// Max 100, all team data found < 100, max id is 9999
-	// sequential request avoid blocked from host
-	for i := 1; i <= 100; i++ {
-		if Flag >= len(teamNames) {
-			// All teams ids found, use this id for the next request
-			fmt.Println("All data found", i)
-			break
-		}
-		if err := players(i); err != nil {
-			fmt.Println(err)
-			continue
-		}
+	maxIDs := os.Getenv("MAX_IDS")
+	maxID, err := strconv.Atoi(maxIDs)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	for i := 0; i < 10; i++ {
+		go func(id int, j chan int, r chan string) {
+			players(id, j, r)
+		}(i, job, result)
+	}
+
+	for i := 1; i <= maxID; i++ {
+		job <- i
+	}
+	close(job)
+
+	for i := 0; i < len(teamNames); i++ {
+		res := <-result
+		fmt.Printf("Received %s\n", res)
 	}
 
 	show(PlayerData)
 }
 
-func players(id int) error {
-	url := fmt.Sprintf("https://vintagemonster.onefootball.com/api/teams/en/%d.json", id)
-	resp, err := http.Get(url)
-	if err != nil {
-		return err
+func players(id int, job chan int, result chan string) {
+	for j := range job {
+		fmt.Printf("Handle request id %d with worker %d\n", j, id)
+		url := fmt.Sprintf(FootballTeam, j)
+		resp, err := http.Get(url)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			err := fmt.Sprintf("status code is %d, id %d\n", resp.StatusCode, j)
+			fmt.Println(err)
+			continue
+		}
+
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		responseData := ResponseData{}
+
+		if err := json.Unmarshal(body, &responseData); err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		teamData := TeamData[responseData.Data.Team.Name]
+		if teamData == nil {
+			continue
+		}
+
+		fmt.Printf("%s found on id %d\n", responseData.Data.Team.Name, id)
+
+		// map player to PlayerData
+		for _, player := range responseData.Data.Team.Players {
+			playerData := PlayerData[player.Name]
+			player.Teams = append(playerData.Teams, responseData.Data.Team.Name)
+			PlayerData[player.Name] = player
+		}
+
+		result <- teamData.Name
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		err := fmt.Sprintf("status code is %d, id %d\n", resp.StatusCode, id)
-		return errors.New(err)
-	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	responseData := ResponseData{}
-
-	if err := json.Unmarshal(body, &responseData); err != nil {
-		return err
-	}
-
-	teamData := TeamData[responseData.Data.Team.Name]
-	if teamData == nil {
-		return nil
-	}
-
-	Flag++
-	fmt.Printf("%s found on id %d\n", responseData.Data.Team.Name, id)
-
-	// map player to PlayerData
-	for _, player := range responseData.Data.Team.Players {
-		playerData := PlayerData[player.Name]
-		player.Teams = append(playerData.Teams, responseData.Data.Team.Name)
-		PlayerData[player.Name] = player
-	}
-
-	return nil
 }
 
 func show(players map[string]Player) {
